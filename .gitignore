@@ -1,0 +1,7 @@
+# Secrets and runtime data must never be committed
+.env
+.env.*
+node_modules/
+uploads/
+*.log
+.DS_Store
