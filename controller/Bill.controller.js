@@ -9,6 +9,7 @@ const Product = require("../models/Products.model");
 const BranchStock = require("../models/BranchStock.model");
 const Settings = require("../models/settings.model");
 const Customer = require("../models/Customer.model");
+const Salesperson = require("../models/Salesperson.model");
 
 const { verifyToken } = require("../middleware/auth.middleware");
 const { authorizeRoles } = require("../middleware/role.middleware");
@@ -114,6 +115,7 @@ bill.post("/add", verifyToken, authorizeRoles("admin", "staff"), billLimiter, as
         productId: dbProduct._id,
         itemName: dbProduct.itemName,
         price: dbProduct.price,
+        priceQty: dbProduct.priceQty || 1,
         quantity: item.quantity,
         unit,
         gstIncluded: !!dbProduct.gstIncluded,
@@ -446,6 +448,56 @@ bill.get("/:id", verifyToken, authorizeRoles("admin"), async (req, res) => {
 
     return res.status(200).json({ success: true, data: singleBill });
   } catch (error) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+// Admin: delete a bill. Unless ?restock=false, the sold quantities go back where they came from:
+// the billing branch's stock for staff bills, central stock for admin bills (or if that branch no longer exists).
+bill.delete("/:id", verifyToken, authorizeRoles("admin"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid bill ID format" });
+    }
+    const restock = req.query.restock !== "false";
+
+    // Deleting first is the atomic claim: a double click can't restock twice
+    const deleted = await Bill.findOneAndDelete({ _id: id }).lean();
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: "Bill not found" });
+    }
+
+    if (restock) {
+      const qtyByProduct = new Map();
+      for (const p of deleted.products || []) {
+        if (!p.productId) continue;
+        const key = String(p.productId);
+        qtyByProduct.set(key, (qtyByProduct.get(key) || 0) + p.quantity);
+      }
+      // Skip products deleted since the sale, so no orphan branch stock is created
+      const existing = new Set((await Product.find({ _id: { $in: [...qtyByProduct.keys()] } }).distinct("_id")).map(String));
+      const items = [...qtyByProduct].filter(([pid]) => existing.has(pid)).map(([productId, quantity]) => ({ productId, quantity }));
+
+      const biller = await Salesperson.findById(deleted.billedBy).select("role").lean();
+      const branchId = biller?.role === "staff" ? biller._id : null;
+      try {
+        if (branchId) {
+          await BranchStock.bulkWrite(items.map((i) => ({
+            updateOne: { filter: { product: i.productId, branch: branchId }, update: { $inc: { stock: i.quantity } }, upsert: true },
+          })));
+        } else if (items.length) {
+          await restoreStock(items, null);
+        }
+      } catch (e) {
+        console.error("Restock after bill delete failed:", e);
+        return res.status(200).json({ success: true, message: "Bill deleted, but stock could not be restored. Adjust it on the Stock page." });
+      }
+    }
+
+    return res.status(200).json({ success: true, message: restock ? "Bill deleted and stock restored" : "Bill deleted" });
+  } catch (error) {
+    console.error("Delete bill error:", error);
     return res.status(500).json({ success: false, message: "Server error" });
   }
 });

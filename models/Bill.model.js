@@ -60,6 +60,12 @@ const BillSchema = new mongoose.Schema(
             required: true,
             min: 0,
           },
+          // Snapshot of the product's price basis: price is for this many units (e.g. ₹120 per 500 g)
+          priceQty: {
+            type: Number,
+            min: 0.001,
+            default: 1,
+          },
           quantity: {
             type: Number,
             required: true,
@@ -133,7 +139,7 @@ BillSchema.pre("validate", function () {
     this.paymentMethod = this.paymentMethod.toLowerCase();
   }
 
-  // item.total is the line as priced (price x qty).
+  // item.total is the line as priced (price / priceQty x qty), e.g. ₹120 per 500 g, 750 g sold = ₹180.
   //  - GST excluded: 5% is added on top of the line.
   //  - GST included: the line already contains it, so nothing is added; the GST portion is split out for display.
   // subTotal = value before GST, gstAmount = GST (added or contained), totalAmount = what the customer pays.
@@ -144,7 +150,7 @@ BillSchema.pre("validate", function () {
 
   if (this.products && this.products.length > 0) {
     this.products.forEach((item) => {
-      item.total = r2(item.price * item.quantity);
+      item.total = r2((item.price / (item.priceQty || 1)) * item.quantity);
       if (item.gstIncluded) {
         const contained = r2((item.total * GST_RATE) / (1 + GST_RATE));
         gst += contained;

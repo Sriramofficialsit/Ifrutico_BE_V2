@@ -18,6 +18,13 @@ const qtyText = (item) => {
   return item.unit && item.unit !== "pcs" ? `${num} ${item.unit}` : num;
 };
 
+// Rate column: "₹120.00" or, when priced per several units, "₹120.00 / 500 g"
+const rateText = (item) => {
+  const per = Number(item.priceQty) || 1;
+  if (per === 1) return money(item.price);
+  return `${money(item.price)} / ${qtyText({ quantity: per, unit: item.unit })}`;
+};
+
 const formatDate = (d) =>
   new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 const formatTime = (d) => new Date(d).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
@@ -194,6 +201,7 @@ const buildInvoicePdf = (billData, settings) =>
         if (item.gstIncluded) { font("Inter", 8, C.accent); text("Price includes GST", X.item, y + 5 + nameH, { characterSpacing: 0.2 }); }
         font("Inter", 10, C.ink); text(qtyText(item), X.qty, y + 4, { width: 60, align: "center" });
         font("Inter", 10, C.soft); text(money(item.price), X.rate, y + 4, { width: 70, align: "right" });
+        if ((Number(item.priceQty) || 1) !== 1) { font("Inter", 8, C.soft); text(`per ${qtyText({ quantity: item.priceQty, unit: item.unit })}`, X.rate, y + 17, { width: 70, align: "right" }); }
         font("Inter-Bold", 10.5, C.ink); text(money(item.total), X.amt - 80, y + 4, { width: 80, align: "right" });
         y += rowH - 6;
         doc.moveTo(L, y).lineTo(R, y).lineWidth(0.5).strokeColor(C.line).stroke();
@@ -254,7 +262,7 @@ const buildInvoiceEmail = (bill, settings) => {
     <tr>
       <td class="pad-x" style="padding:14px 0;border-bottom:1px solid #e6e2da;">
         <div class="ink" style="font-size:15px;font-weight:600;color:#1f2a26;line-height:1.35;">${escapeHtml(p.itemName)}</div>
-        <div class="soft" style="font-size:13px;color:#6b7671;margin-top:3px;">${escapeHtml(qtyText(p))} &times; ${money(p.price)}${p.gstIncluded ? " &middot; incl. GST" : ""}</div>
+        <div class="soft" style="font-size:13px;color:#6b7671;margin-top:3px;">${escapeHtml(qtyText(p))} &times; ${escapeHtml(rateText(p))}${p.gstIncluded ? " &middot; incl. GST" : ""}</div>
       </td>
       <td align="right" valign="top" class="ink" style="padding:14px 0;border-bottom:1px solid #e6e2da;font-size:15px;font-weight:700;color:#1f2a26;white-space:nowrap;">${money(p.total)}</td>
     </tr>`).join("");
@@ -385,7 +393,7 @@ const buildInvoiceEmail = (bill, settings) => {
     `Thank you, ${bill.customerName}!`,
     `Date: ${formatDate(bill.createdAt)} ${formatTime(bill.createdAt)}   Payment: ${payLabel(bill.paymentMethod)}`,
     "",
-    ...bill.products.map((p) => `- ${p.itemName}  ${qtyText(p)} x ${money(p.price)}${p.gstIncluded ? " (incl. GST)" : ""} = ${money(p.total)}`),
+    ...bill.products.map((p) => `- ${p.itemName}  ${qtyText(p)} x ${rateText(p)}${p.gstIncluded ? " (incl. GST)" : ""} = ${money(p.total)}`),
     "",
     `Subtotal: ${money(bill.subTotal)}`,
     `GST (5%): ${money(bill.gstAmount)}`,

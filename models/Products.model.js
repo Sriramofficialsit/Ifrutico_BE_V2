@@ -18,10 +18,13 @@ const ProductSchema = new mongoose.Schema(
     maxlength: 100,
   },
 
+  // Preset categories (fruits, vegetables, ...) or any custom one typed by the admin
   category: {
     type: String,
-    enum: ["fruits", "vegetables", "flowers", "nuts", "spices", "herbals"],
     required: true,
+    trim: true,
+    lowercase: true,
+    maxlength: 50,
   },
 
   price: {
@@ -30,7 +33,16 @@ const ProductSchema = new mongoose.Schema(
     min: 0
   },
 
-  // Unit the price and stock are measured in (price is "per unit", stock is a quantity of that unit)
+  // How many units the price is for, e.g. price 120 + priceQty 500 + unit "g" = ₹120 per 500 g.
+  // Billing charges price / priceQty for every unit sold, so any custom weight can be billed.
+  priceQty: {
+    type: Number,
+    min: 0.001,
+    default: 1,
+  },
+
+  // Unit the price and stock are measured in (price is "per priceQty units", stock is a quantity of that unit).
+  // The dashboard enters/shows stock as packs of priceQty (5 x 1000 g); it is stored here in units (5000 g).
   unit: {
     type: String,
     enum: ["pcs", "g", "kg", "ml", "ltr"],
@@ -71,7 +83,7 @@ ProductSchema.index({ createdAt: -1 });
 
 ProductSchema.virtual("status").get(function () {
   if (this.stock === 0) return "out_of_stock";
-  if (this.stock <= 5) return "low_stock";
+  if (this.stock / (this.priceQty || 1) <= 5) return "low_stock"; // 5 packs or fewer
   return "in_stock";
 });
 

@@ -24,7 +24,8 @@ const removeUploaded = (files = []) => removeImages(files.map((f) => `/uploads/p
 const withStatus = (p) => ({
   ...p,
   unit: p.unit || "pcs", // documents created before units existed
-  status: p.stock === 0 ? "out_of_stock" : p.stock <= 5 ? "low_stock" : "in_stock",
+  priceQty: p.priceQty || 1, // documents created before price-per-quantity existed
+  status: p.stock === 0 ? "out_of_stock" : p.stock / (p.priceQty || 1) <= 5 ? "low_stock" : "in_stock", // 5 packs or fewer
 });
 
 // The browser-declared mimetype is attacker-controlled, so also check the file's real signature (magic bytes)
@@ -61,13 +62,16 @@ const UNITS = ["pcs", "g", "kg", "ml", "ltr"];
 const stockError = (unit, stock) =>
   unit === "pcs" && !Number.isInteger(stock) ? "Stock must be a whole number for items counted in pcs." : null;
 
+const PRESET_CATEGORIES = ["fruits", "vegetables", "flowers", "nuts", "spices", "herbals"];
+// Presets or a custom category; stored lowercase so "Juices" and "juices" are the same category
+const categoryField = Joi.string().trim().lowercase().min(1).max(50);
+
 const productSchema = Joi.object({
   sku: Joi.string().trim().max(30).required(),
   itemName: Joi.string().trim().max(100).required(),
-  category: Joi.string()
-    .valid("fruits", "vegetables", "flowers", "nuts", "spices", "herbals")
-    .required(),
+  category: categoryField.required(),
   price: Joi.number().min(0).required(),
+  priceQty: Joi.number().min(0.001).precision(3).default(1),
   unit: Joi.string().valid(...UNITS).default("pcs"),
   gstIncluded: Joi.boolean().default(false), // multipart sends "true"/"false"; Joi converts
   stock: Joi.number().min(0).precision(3).required()
@@ -76,9 +80,7 @@ const productSchema = Joi.object({
 const fetchSchema = Joi.object({
   page: Joi.number().min(1).default(1),
   limit: Joi.number().min(1).max(1000).default(10),
-  category: Joi.string().valid(
-    "fruits", "vegetables", "flowers", "nuts", "spices", "herbals"
-  ),
+  category: categoryField,
   search: Joi.string().allow(""),
   // admin only: "central" (default) or a branch id. Staff are always pinned to their own branch.
   branch: Joi.string().allow("")
@@ -94,10 +96,9 @@ const transferSchema = Joi.object({
 
 const updateProductSchema = Joi.object({
   itemName: Joi.string().trim().max(100),
-  category: Joi.string().valid(
-    "fruits", "vegetables", "flowers", "nuts", "spices", "herbals"
-  ),
+  category: categoryField,
   price: Joi.number().min(0),
+  priceQty: Joi.number().min(0.001).precision(3),
   unit: Joi.string().valid(...UNITS),
   gstIncluded: Joi.boolean(),
   stock: Joi.number().min(0).precision(3)
@@ -119,7 +120,7 @@ product.post("/add", verifyToken, authorizeRoles("admin"), handleUpload, async (
         });
       }
 
-      let { sku, itemName, category, price, unit, stock, gstIncluded } = value;
+      let { sku, itemName, category, price, priceQty, unit, stock, gstIncluded } = value;
 
       const unitStockError = stockError(unit, stock);
       if (unitStockError) {
@@ -146,6 +147,7 @@ product.post("/add", verifyToken, authorizeRoles("admin"), handleUpload, async (
         itemName,
         category,
         price,
+        priceQty,
         unit,
         gstIncluded,
         stock,
@@ -173,6 +175,17 @@ product.post("/add", verifyToken, authorizeRoles("admin"), handleUpload, async (
     }
   }
 );
+// Preset categories plus every custom one already used, for the product form's category picker
+product.get("/categories", verifyToken, async (req, res) => {
+  try {
+    const used = await Product.distinct("category");
+    const data = [...new Set([...PRESET_CATEGORIES, ...used.filter(Boolean)])];
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+});
+
 product.get("/fetch", verifyToken, async (req, res) => {
   try {
     const { error, value } = fetchSchema.validate(req.query, { abortEarly: false });

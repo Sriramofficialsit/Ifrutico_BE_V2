@@ -132,7 +132,7 @@ router.get("/:id/overview", verifyToken, authorizeRoles("admin"), async (req, re
         { $match: { branch: oid, stock: { $gt: 0 } } },
         { $lookup: { from: "products", localField: "product", foreignField: "_id", as: "p" } },
         { $unwind: "$p" },
-        { $group: { _id: null, items: { $sum: 1 }, value: { $sum: { $multiply: ["$stock", "$p.price"] } } } },
+        { $group: { _id: null, items: { $sum: 1 }, value: { $sum: { $multiply: ["$stock", { $divide: ["$p.price", { $ifNull: ["$p.priceQty", 1] }] }] } } } },
       ]),
     ]);
 
