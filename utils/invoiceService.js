@@ -193,15 +193,12 @@ const buildInvoicePdf = (billData, settings) =>
       billData.products.forEach((item, i) => {
         font("Inter-SemiBold", 10.5, C.ink);
         const nameH = doc.heightOfString(item.itemName, { width: 255 });
-        const tagH = item.gstIncluded ? 12 : 0;
-        const rowH = Math.max(34, nameH + 18 + tagH);
+        const rowH = Math.max(34, nameH + 18);
         if (y + rowH > BOTTOM) { newPage(); drawTableHead(); }
         font("Inter", 9, C.soft); text(String(i + 1).padStart(2, "0"), X.idx, y + 4);
         font("Inter-SemiBold", 10.5, C.ink); doc.text(item.itemName, X.item, y + 3, { width: 255, lineBreak: true });
-        if (item.gstIncluded) { font("Inter", 8, C.accent); text("Price includes GST", X.item, y + 5 + nameH, { characterSpacing: 0.2 }); }
         font("Inter", 10, C.ink); text(qtyText(item), X.qty, y + 4, { width: 60, align: "center" });
         font("Inter", 10, C.soft); text(money(item.price), X.rate, y + 4, { width: 70, align: "right" });
-        if ((Number(item.priceQty) || 1) !== 1) { font("Inter", 8, C.soft); text(`per ${qtyText({ quantity: item.priceQty, unit: item.unit })}`, X.rate, y + 17, { width: 70, align: "right" }); }
         font("Inter-Bold", 10.5, C.ink); text(money(item.total), X.amt - 80, y + 4, { width: 80, align: "right" });
         y += rowH - 6;
         doc.moveTo(L, y).lineTo(R, y).lineWidth(0.5).strokeColor(C.line).stroke();
