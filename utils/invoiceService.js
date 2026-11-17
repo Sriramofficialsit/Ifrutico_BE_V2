@@ -12,17 +12,18 @@ const headerSafe = (v) => String(v ?? "").replace(/[\r\n"<>]/g, "").trim().slice
 const money = (n) =>
   `₹${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const qtyText = (item) => {
-  const q = Number(item.quantity);
-  const num = Number.isInteger(q) ? String(q) : String(Number(q.toFixed(3)));
-  return item.unit && item.unit !== "pcs" ? `${num} ${item.unit}` : num;
-};
 
-// Rate column: "₹120.00" or, when priced per several units, "₹120.00 / 500 g"
-const rateText = (item) => {
-  const per = Number(item.priceQty) || 1;
-  if (per === 1) return money(item.price);
-  return `${money(item.price)} / ${qtyText({ quantity: per, unit: item.unit })}`;
+// Small units are shown in their larger unit so rates read per litre / per kg: 500 g -> 0.5 kg
+const BIG_UNIT = { g: "kg", ml: "ltr" };
+const fmtNum = (n) => (Number.isInteger(n) ? String(n) : String(Number(n.toFixed(3))));
+
+// "16 ltr × ₹255.00/ltr", "2 × ₹50.00" — quantity and per-unit rate, independent of the pack size the price was set for
+const lineText = (item) => {
+  let unit = item.unit || "pcs";
+  let qty = Number(item.quantity) || 0;
+  let rate = (Number(item.price) || 0) / (Number(item.priceQty) || 1);
+  if (BIG_UNIT[unit]) { qty /= 1000; rate *= 1000; unit = BIG_UNIT[unit]; }
+  return unit === "pcs" ? `${fmtNum(qty)} × ${money(rate)}` : `${fmtNum(qty)} ${unit} × ${money(rate)}/${unit}`;
 };
 
 const formatDate = (d) =>
@@ -175,14 +176,14 @@ const buildInvoicePdf = (billData, settings) =>
       y = Math.max(y1, y2) + 16;
 
       // ---- items table ----
-      const X = { idx: L + 12, item: L + 40, qty: 318, rate: 388, amt: R - 12 };
+      const X = { idx: L + 12, item: L + 40, qty: 286, amt: R - 12 };
+      const NAME_W = 236, QTY_W = 170;
       const drawTableHead = () => {
         doc.roundedRect(L, y, CW, 28, 8).fill(C.canvas);
         font("Inter-SemiBold", 7.5, C.soft);
         text("#", X.idx, y + 10, { characterSpacing: 1 });
         text("ITEM", X.item, y + 10, { characterSpacing: 1 });
-        text("QTY", X.qty, y + 10, { width: 60, align: "center", characterSpacing: 1 });
-        text("RATE", X.rate, y + 10, { width: 70, align: "right", characterSpacing: 1 });
+        text("QTY × RATE", X.qty, y + 10, { width: QTY_W, align: "center", characterSpacing: 1 });
         text("AMOUNT", X.amt - 80, y + 10, { width: 80, align: "right", characterSpacing: 1 });
         y += 36;
       };
@@ -192,13 +193,12 @@ const buildInvoicePdf = (billData, settings) =>
       const BOTTOM = H - 110; // keep clear of the footer
       billData.products.forEach((item, i) => {
         font("Inter-SemiBold", 10.5, C.ink);
-        const nameH = doc.heightOfString(item.itemName, { width: 255 });
+        const nameH = doc.heightOfString(item.itemName, { width: NAME_W });
         const rowH = Math.max(34, nameH + 18);
         if (y + rowH > BOTTOM) { newPage(); drawTableHead(); }
         font("Inter", 9, C.soft); text(String(i + 1).padStart(2, "0"), X.idx, y + 4);
-        font("Inter-SemiBold", 10.5, C.ink); doc.text(item.itemName, X.item, y + 3, { width: 255, lineBreak: true });
-        font("Inter", 10, C.ink); text(qtyText(item), X.qty, y + 4, { width: 60, align: "center" });
-        font("Inter", 10, C.soft); text(money(item.price), X.rate, y + 4, { width: 70, align: "right" });
+        font("Inter-SemiBold", 10.5, C.ink); doc.text(item.itemName, X.item, y + 3, { width: NAME_W, lineBreak: true });
+        font("Inter", 10, C.ink); text(lineText(item), X.qty, y + 4, { width: QTY_W, align: "center" });
         font("Inter-Bold", 10.5, C.ink); text(money(item.total), X.amt - 80, y + 4, { width: 80, align: "right" });
         y += rowH - 6;
         doc.moveTo(L, y).lineTo(R, y).lineWidth(0.5).strokeColor(C.line).stroke();
@@ -259,7 +259,7 @@ const buildInvoiceEmail = (bill, settings) => {
     <tr>
       <td class="pad-x" style="padding:14px 0;border-bottom:1px solid #e6e2da;">
         <div class="ink" style="font-size:15px;font-weight:600;color:#1f2a26;line-height:1.35;">${escapeHtml(p.itemName)}</div>
-        <div class="soft" style="font-size:13px;color:#6b7671;margin-top:3px;">${escapeHtml(qtyText(p))} &times; ${escapeHtml(rateText(p))}${p.gstIncluded ? " &middot; incl. GST" : ""}</div>
+        <div class="soft" style="font-size:13px;color:#6b7671;margin-top:3px;">${escapeHtml(lineText(p))}${p.gstIncluded ? " &middot; incl. GST" : ""}</div>
       </td>
       <td align="right" valign="top" class="ink" style="padding:14px 0;border-bottom:1px solid #e6e2da;font-size:15px;font-weight:700;color:#1f2a26;white-space:nowrap;">${money(p.total)}</td>
     </tr>`).join("");
@@ -390,7 +390,7 @@ const buildInvoiceEmail = (bill, settings) => {
     `Thank you, ${bill.customerName}!`,
     `Date: ${formatDate(bill.createdAt)} ${formatTime(bill.createdAt)}   Payment: ${payLabel(bill.paymentMethod)}`,
     "",
-    ...bill.products.map((p) => `- ${p.itemName}  ${qtyText(p)} x ${rateText(p)}${p.gstIncluded ? " (incl. GST)" : ""} = ${money(p.total)}`),
+    ...bill.products.map((p) => `- ${p.itemName}  ${lineText(p)}${p.gstIncluded ? " (incl. GST)" : ""} = ${money(p.total)}`),
     "",
     `Subtotal: ${money(bill.subTotal)}`,
     `GST (5%): ${money(bill.gstAmount)}`,
