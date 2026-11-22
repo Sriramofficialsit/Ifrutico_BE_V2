@@ -26,4 +26,12 @@ const productUpload = makeUploader({
   mimes: ["image/jpeg", "image/png"],
 });
 
+// Campaign posters / event banners (emailed, so kept small)
+const campaignUpload = makeUploader({
+  dir: path.join(__dirname, "..", "uploads", "campaigns"),
+  maxSize: 3 * 1024 * 1024,
+  mimes: ["image/jpeg", "image/png"],
+});
+
 module.exports = productUpload;
+module.exports.campaignUpload = campaignUpload;

@@ -72,4 +72,26 @@ router.post("/save", verifyToken, async (req, res) => {
   }
 });
 
+const printSchema = Joi.object({
+  printPaper: Joi.string().valid("58mm", "80mm", "104mm", "a4").required(),
+  printScale: Joi.number().integer().min(60).max(160).required(),
+  printMargin: Joi.number().min(0).max(15).precision(1).required(),
+});
+
+// PUT /settings/print — bill printing options only (saved separately from shop details)
+router.put("/print", verifyToken, async (req, res) => {
+  const { error, value } = printSchema.validate(req.body);
+  if (error) return res.status(400).json({ success: false, message: error.details[0].message });
+  try {
+    const updated = await Settings.findOneAndUpdate(
+      { userId: req.user.id },
+      { $set: value },
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    ).select("printPaper printScale printMargin").lean();
+    return res.json({ success: true, message: "Print settings saved", data: updated });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: "Could not save print settings" });
+  }
+});
+
 module.exports = router;

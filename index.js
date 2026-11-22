@@ -19,6 +19,9 @@ const orderLeads = require("./controller/OrderLead.controller");
 const testimonials = require("./controller/Testimonial.controller");
 const dealershipLeads = require("./controller/DealershipLead.controller");
 const customers = require("./controller/Customer.controller");
+const billingConfig = require("./controller/BillingConfig.controller");
+const coupons = require("./controller/Coupon.controller");
+const campaigns = require("./controller/Campaign.controller");
 
 const morgan = require("morgan");
 const path = require("path");
@@ -98,6 +101,9 @@ app.use("/order-leads", orderLeads);
 app.use("/testimonials", testimonials);
 app.use("/dealership-leads", dealershipLeads);
 app.use("/customers", customers);
+app.use("/billing-config", billingConfig);
+app.use("/coupons", coupons);
+app.use("/campaigns", campaigns);
 
 app.get("/", (req, res) => {
   res.json({ message: "Server Working!!", success: true });

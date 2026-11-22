@@ -69,6 +69,14 @@ const settingsSchema = new mongoose.Schema(
       uppercase: true,
     },
     
+    // Bill printing (per branch, since each counter can have a different printer)
+    // Paper: thermal roll width or a full A4 page
+    printPaper: { type: String, enum: ["58mm", "80mm", "104mm", "a4"], default: "80mm" },
+    // Size of everything on the bill, in % (100 = normal)
+    printScale: { type: Number, min: 60, max: 160, default: 100 },
+    // Blank space around the bill, in mm
+    printMargin: { type: Number, min: 0, max: 15, default: 3 },
+
     // Low stock alert threshold (Useful for global notifications)
     lowStockThreshold: {
       type: Number,

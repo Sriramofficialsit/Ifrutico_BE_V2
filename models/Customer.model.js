@@ -12,6 +12,8 @@ const CustomerSchema = new mongoose.Schema(
     },
     name: { type: String, required: true, trim: true, maxlength: 100 },
     email: { type: String, trim: true, lowercase: true, maxlength: 150 },
+    // Set by the unsubscribe link in campaign emails; such customers never get campaigns again
+    marketingOptOut: { type: Boolean, default: false },
     gstNumber: {
       type: String,
       trim: true,

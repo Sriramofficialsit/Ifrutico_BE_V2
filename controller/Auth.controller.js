@@ -1,3 +1,4 @@
+const { codeEmail, logoAttachment, hasLogo, LOGO_CID } = require("../utils/mailLayout");
 const express = require("express");
 const auth = express.Router();
 const bcrypt = require("bcrypt");
@@ -46,12 +47,6 @@ const resendLimiter = rateLimit({
   message: { success: false, message: "Too many code requests, please try again in a few minutes" }
 });
 
-const registerLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 5,
-  message: { success: false, message: "Too many registration attempts, please try again later" }
-});
-
 const otpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 3,
@@ -61,13 +56,6 @@ const otpLimiter = rateLimit({
 // Validation Schemas
 const passwordPattern = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
 const passwordErrorMessage = "Password must be at least 8 characters long and include uppercase, lowercase, a number, and a special character.";
-
-const registerSchema = Joi.object({
-  name: Joi.string().min(3).max(50).required(),
-  email: Joi.string().email().required().lowercase(),
-  password: Joi.string().regex(passwordPattern).required().messages({ 'string.pattern.base': passwordErrorMessage }),
-  mobile: Joi.string().pattern(/^[0-9]{10}$/).required(),
-});
 
 const loginSchema = Joi.object({
   email: Joi.string().email().required().lowercase(),
@@ -129,6 +117,15 @@ const sendLoginOtp = async (user) => {
       to: user.email,
       subject: "Your Ifrutico login code",
       text: `Your login verification code is ${otp}. It is valid for 5 minutes. If you did not try to sign in, ignore this email and change your password.`,
+      html: codeEmail({
+        title: "Your sign-in code",
+        intro: `Hi ${user.name || "there"}, use this code to finish signing in to your Ifrutico dashboard.`,
+        code: otp,
+        minutes: 5,
+        note: "Didn't try to sign in? Someone may know your password. Ignore this email and change your password soon.",
+        logoSrc: hasLogo() ? `cid:${LOGO_CID}` : null,
+      }),
+      attachments: logoAttachment(),
     });
   } catch (e) {
     user.otp = undefined;
@@ -172,37 +169,6 @@ const DUMMY_HASH = bcrypt.hashSync("dummy-password-for-timing", 12);
 const MAX_OTP_ATTEMPTS = 5;
 
 // Routes
-auth.post("/register-user", registerLimiter, async (req, res) => {
-  // Accounts are created by admins (POST /sales/add). Public sign-up only exists if explicitly enabled.
-  if (process.env.ALLOW_PUBLIC_REGISTER !== "true") {
-    return res.status(404).json({ success: false, message: "Route not found" });
-  }
-  try {
-    const { error, value } = registerSchema.validate(req.body);
-    if (error) {
-      return res.status(400).json({ success: false, message: error.details[0].message });
-    }
-    const { name, email, password, mobile } = value;
-    
-    const existingUser = await Salesperson.findOne({ email });
-    if (existingUser) {
-      return res.json({ success: true, message: "If an account exists with this email, you will be notified." });
-    }
-
-    // Public sign-ups are never trusted: always a staff account that an admin must activate
-    const newUser = new Salesperson({ name, email, password, mobile, role: "staff", status: "inactive" });
-    await newUser.save();
-
-    return res.json({ success: true, message: "Registration request received. Please check your email if your account is approved." });
-
-  } catch (error) {
-    if (error.code === 11000) {
-      return res.json({ success: true, message: "Registration request received. Please check your email if your account is approved." });
-    }
-    return res.status(500).json({ success: false, message: "Internal Server Error" });
-  }
-});
-
 auth.post("/login-password", loginLimiter, emailLoginLimiter, async (req, res) => {
   try {
     const { error, value } = loginSchema.validate(req.body);
@@ -414,8 +380,17 @@ auth.post("/forgot-password", otpLimiter, async (req, res) => {
     await transporter.sendMail({
       from: process.env.MAIL_USER,
       to: user.email,
-      subject: "Password Reset OTP",
+      subject: "Your Ifrutico password reset code",
       text: `Your OTP for password reset is ${otp}. It is valid for 10 minutes.`,
+      html: codeEmail({
+        title: "Reset your password",
+        intro: `Hi ${user.name || "there"}, enter this code on the reset page to choose a new password.`,
+        code: otp,
+        minutes: 10,
+        note: "Didn't ask to reset your password? You can safely ignore this email; your password stays the same.",
+        logoSrc: hasLogo() ? `cid:${LOGO_CID}` : null,
+      }),
+      attachments: logoAttachment(),
     });
 
     return res.json(genericReply);

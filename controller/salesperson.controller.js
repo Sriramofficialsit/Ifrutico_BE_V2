@@ -8,6 +8,7 @@ const BranchStock = require("../models/BranchStock.model");
 const Bill = require("../models/Bill.model");
 const { verifyToken } = require("../middleware/auth.middleware");
 const { authorizeRoles } = require("../middleware/role.middleware");
+const { sendAccountCredentials } = require("../utils/accountMail");
 
 
 const passwordPattern = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
@@ -37,9 +38,21 @@ router.post("/add", verifyToken, authorizeRoles("admin"), async (req, res) => {
     const responseData = newSalesPerson.toObject();
     delete responseData.password;
 
+    // Email the login details to the new user. The account is kept even if the mail fails; the admin is told.
+    let emailSent = true;
+    try {
+      await sendAccountCredentials(newSalesPerson, value.password);
+    } catch (mailErr) {
+      emailSent = false;
+      console.error("Account credentials email failed:", mailErr.message);
+    }
+
     return res.status(201).json({
       success: true,
-      message: "SalesPerson created successfully",
+      message: emailSent
+        ? `Account created. Login details emailed to ${newSalesPerson.email}.`
+        : "Account created, but the login email could not be sent. Share the details with the user yourself.",
+      emailSent,
       data: responseData,
     });
   } catch (error) {
