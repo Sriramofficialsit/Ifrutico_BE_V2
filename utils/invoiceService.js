@@ -2,6 +2,7 @@ const mail = require("./mailLayout");
 const path = require("path");
 const fs = require("fs");
 const PDFDocument = require("pdfkit");
+const { DEFAULT_GSTIN } = require("./shop");
 const transporter = require("./mailer");
 
 // ---------- shared helpers ----------
@@ -81,7 +82,7 @@ const brandOf = (settings) => ({
   name: settings?.shopName || "Ifrutico",
   address: settings?.address || "1/173 Vadugar Street, Karikali, Musiri, TN",
   phone: settings?.phoneNumber || "",
-  gst: settings?.gstNumber || "",
+  gst: settings?.gstNumber || DEFAULT_GSTIN,
   site: "ifrutico.com",
   tagline: "Pure fruit ice cream",
 });

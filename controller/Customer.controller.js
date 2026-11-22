@@ -6,6 +6,7 @@ const Bill = require("../models/Bill.model");
 const { verifyToken } = require("../middleware/auth.middleware");
 const { authorizeRoles } = require("../middleware/role.middleware");
 const Settings = require("../models/settings.model");
+const { DEFAULT_GSTIN } = require("../utils/shop");
 const { buildReportPdf, buildCsv, fmtDay, sendFile, IST } = require("../utils/reportService");
 
 customer.use(verifyToken, authorizeRoles("admin", "staff"));
@@ -119,7 +120,7 @@ customer.get("/report", authorizeRoles("admin"), async (req, res) => {
     const search = String(req.query.search || "").trim().slice(0, 50);
     const rows = await Bill.aggregate([...customerPipeline(req, search), { $sort: { revenue: -1 } }, { $limit: 20000 }]);
     const settings = await Settings.findOne({ userId: req.user.id }).lean();
-    const brand = { name: settings?.shopName || "Ifrutico", address: settings?.address, phone: settings?.phoneNumber, gst: settings?.gstNumber };
+    const brand = { name: settings?.shopName || "Ifrutico", address: settings?.address, phone: settings?.phoneNumber, gst: settings?.gstNumber || DEFAULT_GSTIN };
 
     const revenue = rows.reduce((s, r) => s + (r.revenue || 0), 0);
     const orders = rows.reduce((s, r) => s + (r.orders || 0), 0);

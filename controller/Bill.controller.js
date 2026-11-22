@@ -8,6 +8,7 @@ const Bill = require("../models/Bill.model");
 const Product = require("../models/Products.model");
 const BranchStock = require("../models/BranchStock.model");
 const Settings = require("../models/settings.model");
+const { DEFAULT_GSTIN } = require("../utils/shop");
 const Customer = require("../models/Customer.model");
 const Salesperson = require("../models/Salesperson.model");
 const BillingConfig = require("../models/BillingConfig.model");
@@ -684,7 +685,7 @@ bill.get("/report", verifyToken, authorizeRoles("admin"), async (req, res) => {
     }
     const bills = await Bill.find(filter).populate("billedBy", "name").sort({ createdAt: 1 }).lean();
     const settings = await Settings.findOne({ userId: req.user.id }).lean();
-    const brand = { name: settings?.shopName || "Ifrutico", address: settings?.address, phone: settings?.phoneNumber, gst: settings?.gstNumber };
+    const brand = { name: settings?.shopName || "Ifrutico", address: settings?.address, phone: settings?.phoneNumber, gst: settings?.gstNumber || DEFAULT_GSTIN };
 
     const t = bills.reduce((a, b) => {
       a.revenue += b.totalAmount || 0;
