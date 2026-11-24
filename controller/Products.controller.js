@@ -56,7 +56,7 @@ const handleUpload = (req, res, next) => {
   });
 };
 
-const UNITS = ["pcs", "g", "kg", "ml", "ltr"];
+const { UNITS } = require("../utils/billUnits");
 
 // Countable items can't be fractional; weights/volumes can (up to 3 decimals, e.g. 0.250 kg)
 const stockError = (unit, stock) =>
@@ -66,6 +66,38 @@ const PRESET_CATEGORIES = ["fruits", "vegetables", "flowers", "nuts", "spices", 
 // Presets or a custom category; stored lowercase so "Juices" and "juices" are the same category
 const categoryField = Joi.string().trim().lowercase().min(1).max(50);
 
+// Optional measurement links (0 / blank = not set) so one product can be sold in pcs, weight and volume
+const pieceGramsField = Joi.number().min(0).max(100000).precision(3).empty(""); // weight of 1 pc in g
+const gramsPerLitreField = Joi.number().min(0).max(5000).precision(1).empty(""); // this product's density; 0 = global
+const packWeightField = Joi.number().min(0).max(10000000).precision(3).empty("");  // g per box
+const packVolumeField = Joi.number().min(0).max(10000000).precision(3).empty("");  // ml per box
+const packCountField = Joi.number().min(0).max(1000000).precision(3).empty("");    // pcs / scoops per box
+const packCountUnitField = Joi.string().valid("pcs", "scoop");
+const conversionFields = {
+  pieceGrams: pieceGramsField.default(0), gramsPerLitre: gramsPerLitreField.default(0),
+  packWeight: packWeightField.default(0), packVolume: packVolumeField.default(0),
+  packCount: packCountField.default(0), packCountUnit: packCountUnitField.default("pcs"),
+};
+
+// Price and stock are per box: when the box contents give the stock unit's amount, priceQty must match it
+// (e.g. unit kg + box 4000 g -> priceQty 4), so "₹ per box" and every conversion agree.
+const packProblem = (v) => {
+  const { unit, packWeight: W = 0, packVolume: V = 0, packCount: N = 0, packCountUnit = "pcs" } = v;
+  if ((unit === "pcs" || unit === "scoop") && N > 0 && packCountUnit !== unit) return `Stock is counted in ${unit} but the box count is in ${packCountUnit}.`;
+  if (unit === "pcs" && N > 0 && !Number.isInteger(N)) return "Pieces per box must be a whole number.";
+  return null;
+};
+const packQtyFor = (v) => {
+  const { unit, packWeight: W = 0, packVolume: V = 0, packCount: N = 0 } = v;
+  const r = (n) => Math.round(n * 1000) / 1000;
+  if (unit === "g" && W > 0) return r(W);
+  if (unit === "kg" && W > 0) return r(W / 1000);
+  if (unit === "ml" && V > 0) return r(V);
+  if (unit === "ltr" && V > 0) return r(V / 1000);
+  if ((unit === "pcs" || unit === "scoop") && N > 0) return r(N);
+  return null;
+};
+
 const productSchema = Joi.object({
   sku: Joi.string().trim().max(30).required(),
   itemName: Joi.string().trim().max(100).required(),
@@ -74,7 +106,8 @@ const productSchema = Joi.object({
   priceQty: Joi.number().min(0.001).precision(3).default(1),
   unit: Joi.string().valid(...UNITS).default("pcs"),
   gstIncluded: Joi.boolean().default(false), // multipart sends "true"/"false"; Joi converts
-  stock: Joi.number().min(0).precision(3).required()
+  stock: Joi.number().min(0).precision(3).required(),
+  ...conversionFields,
 });
 
 const fetchSchema = Joi.object({
@@ -101,7 +134,13 @@ const updateProductSchema = Joi.object({
   priceQty: Joi.number().min(0.001).precision(3),
   unit: Joi.string().valid(...UNITS),
   gstIncluded: Joi.boolean(),
-  stock: Joi.number().min(0).precision(3)
+  stock: Joi.number().min(0).precision(3),
+  pieceGrams: pieceGramsField,
+  gramsPerLitre: gramsPerLitreField,
+  packWeight: packWeightField,
+  packVolume: packVolumeField,
+  packCount: packCountField,
+  packCountUnit: packCountUnitField,
 }).min(1); 
 
 
@@ -120,7 +159,10 @@ product.post("/add", verifyToken, authorizeRoles("admin"), handleUpload, async (
         });
       }
 
-      let { sku, itemName, category, price, priceQty, unit, stock, gstIncluded } = value;
+      let { sku, itemName, category, price, priceQty, unit, stock, gstIncluded, pieceGrams, gramsPerLitre, packWeight, packVolume, packCount, packCountUnit } = value;
+      const packErr = packProblem(value);
+      if (packErr) { removeUploaded(req.files); return res.status(400).json({ success: false, message: [packErr] }); }
+      priceQty = packQtyFor(value) ?? priceQty;
 
       const unitStockError = stockError(unit, stock);
       if (unitStockError) {
@@ -151,6 +193,12 @@ product.post("/add", verifyToken, authorizeRoles("admin"), handleUpload, async (
         unit,
         gstIncluded,
         stock,
+        pieceGrams,
+        gramsPerLitre,
+        packWeight,
+        packVolume,
+        packCount,
+        packCountUnit,
         images: imageUrls
       });
 
@@ -430,6 +478,11 @@ product.put(
 
       // Build the $set payload from validated fields
       const setPayload = { ...value };
+      const merged = { unit: productDoc.unit || "pcs", packWeight: productDoc.packWeight || 0, packVolume: productDoc.packVolume || 0, packCount: productDoc.packCount || 0, packCountUnit: productDoc.packCountUnit || "pcs", ...value };
+      const packErr = packProblem(merged);
+      if (packErr) { removeUploaded(req.files); return res.status(400).json({ success: false, message: [packErr] }); }
+      const boxQty = packQtyFor(merged);
+      if (boxQty !== null) setPayload.priceQty = boxQty;
 
       const unitStockError = stockError(value.unit ?? productDoc.unit ?? "pcs", value.stock ?? productDoc.stock);
       if (unitStockError) {

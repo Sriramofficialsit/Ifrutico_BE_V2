@@ -22,6 +22,7 @@ const customers = require("./controller/Customer.controller");
 const billingConfig = require("./controller/BillingConfig.controller");
 const coupons = require("./controller/Coupon.controller");
 const campaigns = require("./controller/Campaign.controller");
+const records = require("./controller/Records.controller");
 
 const morgan = require("morgan");
 const path = require("path");
@@ -104,6 +105,7 @@ app.use("/customers", customers);
 app.use("/billing-config", billingConfig);
 app.use("/coupons", coupons);
 app.use("/campaigns", campaigns);
+app.use("/records", records);
 
 app.get("/", (req, res) => {
   res.json({ message: "Server Working!!", success: true });

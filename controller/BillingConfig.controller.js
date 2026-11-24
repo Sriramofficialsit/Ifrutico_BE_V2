@@ -4,7 +4,7 @@ const BillingConfig = require("../models/BillingConfig.model");
 const { verifyToken } = require("../middleware/auth.middleware");
 const { authorizeRoles } = require("../middleware/role.middleware");
 
-const pick = (c) => ({ scoopGrams: c.scoopGrams, boxSizes: c.boxSizes, gramsPerLitre: c.gramsPerLitre });
+const pick = (c) => ({ scoopGrams: c.scoopGrams, boxSizes: c.boxSizes, gramsPerLitre: c.gramsPerLitre, retailUnit: c.retailUnit || "" });
 
 // GET /billing-config — every logged-in user (billing screens need it)
 router.get("/", verifyToken, async (req, res) => {
@@ -19,6 +19,7 @@ const schema = Joi.object({
   scoopGrams: Joi.number().min(10).max(1000).precision(1).required(),
   boxSizes: Joi.array().items(Joi.number().min(0.1).max(50).precision(2)).min(1).max(12).unique().required(),
   gramsPerLitre: Joi.number().min(100).max(2000).precision(1).required(),
+  retailUnit: Joi.string().valid("", "pcs", "scoop", "g", "kg", "ml", "ltr"), // optional: left unchanged when not sent
 });
 
 // PUT /billing-config — admin only

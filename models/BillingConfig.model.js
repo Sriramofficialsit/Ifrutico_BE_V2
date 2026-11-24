@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-// One shared (global) document: how Events & Functions and Stalls billing convert into inventory units.
+// One shared (global) document: how Retail, Events & Functions and Stalls billing measure and convert into inventory units.
 // Every branch reads the same values, so a change by admin applies everywhere at once.
 const BillingConfigSchema = new mongoose.Schema(
   {
@@ -15,6 +15,9 @@ const BillingConfigSchema = new mongoose.Schema(
     // Weight of 1 litre of ice cream in grams — converts litres <-> grams for products stocked by weight
     // (or scoops in grams <-> products stocked by volume). 1000 = treat 1 g as 1 ml.
     gramsPerLitre: { type: Number, min: 100, max: 2000, default: 1000 },
+    // Retail: measure a new bill line starts in (e.g. "kg"). "" = each product's own stock unit.
+    // Products that can't be converted to it keep their own unit.
+    retailUnit: { type: String, enum: ["", "pcs", "scoop", "g", "kg", "ml", "ltr"], default: "" },
   },
   { timestamps: true, versionKey: false }
 );

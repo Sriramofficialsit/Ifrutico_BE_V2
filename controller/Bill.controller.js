@@ -12,7 +12,7 @@ const { DEFAULT_GSTIN } = require("../utils/shop");
 const Customer = require("../models/Customer.model");
 const Salesperson = require("../models/Salesperson.model");
 const BillingConfig = require("../models/BillingConfig.model");
-const { MEASURABLE, litresToUnits, gramsToUnits } = require("../utils/billUnits");
+const { UNITS, toStock, hasOwnScoop, ownScoopGrams } = require("../utils/billUnits");
 const Coupon = require("../models/Coupon.model");
 const { couponDiscount, couponProblem } = require("../utils/coupon");
 const { buildReportPdf, buildCsv, istDayStart, istDayEnd, fmtDay, fmtDateTime, sendFile, IST } = require("../utils/reportService");
@@ -47,14 +47,21 @@ const validateBill = (data) => {
           // Retail: quantity in the product's unit. Decimals allowed for weight/volume units (e.g. 0.5 kg); whole-number rule for "pcs" is enforced per product below
           quantity: Joi.number().min(0.001).max(100000).precision(3)
             .when("/billType", { is: "retail", then: Joi.required(), otherwise: Joi.forbidden() }),
-          // Events & Functions: N boxes of a configured litre size
+          // Retail: unit the quantity is in (pcs / scoop / g / kg / ml / ltr); defaults to the product's stock unit.
+          // Converted to the stock unit using the product's piece weight / density and the global scoop size.
+          sellUnit: Joi.string().valid(...UNITS)
+            .when("/billType", { is: "retail", then: Joi.optional(), otherwise: Joi.forbidden() }),
+          // Events & Functions: N boxes of any litre size (the configured sizes are only suggestions)
           boxSize: Joi.number().min(0.1).max(50).precision(2)
             .when("/billType", { is: "event", then: Joi.required(), otherwise: Joi.forbidden() }),
           boxes: Joi.number().integer().min(1).max(10000)
             .when("/billType", { is: "event", then: Joi.required(), otherwise: Joi.forbidden() }),
-          // Stalls: number of scoops (scoop size is bill-level `scoopGrams`)
+          // Stalls: number of scoops (scoop size is bill-level `scoopGrams`) for scoop/weight/volume products,
+          // or number of pieces for products counted in pcs. Which one is required is checked per product below.
           scoops: Joi.number().integer().min(1).max(100000)
-            .when("/billType", { is: "stall", then: Joi.required(), otherwise: Joi.forbidden() }),
+            .when("/billType", { is: "stall", then: Joi.optional(), otherwise: Joi.forbidden() }),
+          pieces: Joi.number().integer().min(1).max(100000)
+            .when("/billType", { is: "stall", then: Joi.optional(), otherwise: Joi.forbidden() }),
           // Optional per-line discount: flat ₹ off this line or % of this line's value
           discountType: Joi.string().valid("amount", "percent").optional(),
           discountValue: Joi.number().min(0).precision(2).default(0)
@@ -88,11 +95,26 @@ const lineNet = (p) => {
 // Value the bill discount / coupon applies to: all lines after their own discounts
 const netGross = (lines) => Number(lines.reduce((s, p) => s + lineNet(p), 0).toFixed(2));
 
+// Sale: take `qty` off stock, rounded to 6 decimals inside MongoDB so converted fractions (13.333333 scoops...)
+// never leave float noise. A 0.000001 tolerance lets the very last fraction be sold; the result never goes below 0.
+const STOCK_EPS = 1e-6;
+const hasStock = (qty) => ({ stock: { $gte: qty - STOCK_EPS } });
+// Leftover dust below 0.00001 (e.g. 40 scoops sold as 3 × 13.333333) is snapped to 0.
+const takeStock = (qty) => [
+  { $set: { stock: { $round: [{ $subtract: ["$stock", qty] }, 6] } } },
+  { $set: { stock: { $cond: [{ $lt: ["$stock", 0.00001] }, 0, "$stock"] } } },
+];
+const restoreDelta = (qty) => ({ $inc: { stock: qty } });
+
+// Product fields the unit conversions read; re-checked after the stock update so a mid-bill edit can't skew it
+const LINK_FIELDS = ["pieceGrams", "gramsPerLitre", "packWeight", "packVolume", "packCount", "packCountUnit"];
+const linkVal = (f, v) => (f === "packCountUnit" ? v || "pcs" : Number(v) || 0); // older documents lack these fields
+
 const restoreStock = (items, branchId) =>
   items.length
     ? branchId
-      ? BranchStock.bulkWrite(items.map((i) => ({ updateOne: { filter: { product: i.productId, branch: branchId }, update: { $inc: { stock: i.quantity } } } })))
-      : Product.bulkWrite(items.map((i) => ({ updateOne: { filter: { _id: i.productId }, update: { $inc: { stock: i.quantity } } } })))
+      ? BranchStock.bulkWrite(items.map((i) => ({ updateOne: { filter: { product: i.productId, branch: branchId }, update: restoreDelta(i.quantity) } })))
+      : Product.bulkWrite(items.map((i) => ({ updateOne: { filter: { _id: i.productId }, update: restoreDelta(i.quantity) } })))
     : Promise.resolve();
 
 const billLimiter = rateLimit({
@@ -120,33 +142,41 @@ bill.post("/add", verifyToken, authorizeRoles("admin", "staff"), billLimiter, as
     const decremented = [];
     const branchId = req.user.role === "staff" ? req.user.id : null;
 
-    // Events (litre boxes) and Stalls (scoops) are converted to the product's own stock unit here,
-    // so all three bill types draw from the same inventory. Units are read before any stock is touched.
-    let scoopGrams;
+    // Every line is converted from what was sold (any unit at Retail, litres at Events, scoops/pieces at Stalls)
+    // into the product's stock unit, so all three bill types draw from the same inventory.
+    // Units are read before any stock is touched.
+    const config = await BillingConfig.get();
+    const scoopGrams = billType === "stall" ? (value.scoopGrams || config.scoopGrams) : undefined;
     const unitById = new Map();
-    if (billType !== "retail") {
-      const config = await BillingConfig.get();
-      scoopGrams = billType === "stall" ? (value.scoopGrams || config.scoopGrams) : undefined;
-      const found = await Product.find({ _id: { $in: products.map((p) => p.productId) } }).select("unit itemName").lean();
-      found.forEach((p) => unitById.set(String(p._id), p));
-      for (const item of products) {
-        const p = unitById.get(item.productId);
-        if (!p) return res.status(400).json({ success: false, message: `Product ${item.productId} not found` });
-        if (!MEASURABLE.includes(p.unit)) {
-          return res.status(400).json({ success: false, message: `${p.itemName} is sold in pcs and can't be billed by ${billType === "event" ? "litre box" : "scoop"}.` });
-        }
-        if (billType === "event") {
-          if (!config.boxSizes.some((b) => Math.abs(b - item.boxSize) < 1e-9)) {
-            return res.status(400).json({ success: false, message: `${item.boxSize} L is not one of the configured box sizes.` });
-          }
-          item.quantity = litresToUnits(item.boxSize * item.boxes, p.unit, config.gramsPerLitre);
-        } else {
-          item.quantity = gramsToUnits(scoopGrams * item.scoops, p.unit, config.gramsPerLitre);
-        }
-        if (!(item.quantity > 0)) {
-          return res.status(400).json({ success: false, message: `Quantity for ${p.itemName} is too small.` });
-        }
+    const found = await Product.find({ _id: { $in: products.map((p) => p.productId) } }).select(`unit itemName ${LINK_FIELDS.join(" ")}`).lean();
+    found.forEach((p) => unitById.set(String(p._id), { ...p, unit: p.unit || "pcs" }));
+    for (const item of products) {
+      const p = unitById.get(item.productId);
+      if (!p) return res.status(400).json({ success: false, message: `Product ${item.productId} not found` });
+      let sold, sellUnit;
+      if (billType === "event") {
+        sold = item.boxSize * item.boxes; sellUnit = "ltr";
+      } else if (billType === "stall") {
+        if (!!item.scoops === !!item.pieces) return res.status(400).json({ success: false, message: `${p.itemName}: bill it in either scoops or pieces.` });
+        // Scoops come from the product's own box ("4 L box = 50 scoops") when given; otherwise by this bill's scoop size
+        if (item.scoops && hasOwnScoop(p, config)) { sold = item.scoops; sellUnit = "scoop"; item.scoopGrams = Math.round((ownScoopGrams(p, config) || 0) * 10) / 10; }
+        else if (item.scoops) { sold = scoopGrams * item.scoops; sellUnit = "g"; item.scoopGrams = scoopGrams; }
+        else { sold = item.pieces; sellUnit = "pcs"; }
+      } else {
+        sold = item.quantity; sellUnit = item.sellUnit || p.unit;
+        if (sellUnit === "pcs" && !Number.isInteger(sold)) return res.status(400).json({ success: false, message: `${p.itemName}: pieces must be a whole number.` });
       }
+      item.quantity = toStock(sold, sellUnit, p, config);
+      if (item.quantity === null) {
+        const how = billType === "event" ? "by the litre" : item.scoops ? "by the scoop" : `in ${sellUnit}`;
+        const fix = " Add what one box holds (weight / volume / pcs or scoops) on the Stock page.";
+        return res.status(400).json({ success: false, message: `${p.itemName} (stocked in ${p.unit}) can't be billed ${how}.${fix}` });
+      }
+      if (!(item.quantity > 0)) {
+        return res.status(400).json({ success: false, message: `Quantity for ${p.itemName} is too small.` });
+      }
+      // Retail lines sold in another unit keep what the customer asked for, for the invoice
+      if (billType === "retail" && sellUnit !== p.unit) { item.soldQty = sold; item.soldUnit = sellUnit; }
     }
 
     // Process products and update stock atomically per document
@@ -154,15 +184,16 @@ bill.post("/add", verifyToken, authorizeRoles("admin", "staff"), billLimiter, as
       let dbProduct = null;
       if (branchId) {
         const held = await BranchStock.findOneAndUpdate(
-          { product: item.productId, branch: branchId, stock: { $gte: item.quantity } }, // only decrement if enough branch stock
-          { $inc: { stock: -item.quantity } }
+          { product: item.productId, branch: branchId, ...hasStock(item.quantity) }, // only decrement if enough branch stock
+          takeStock(item.quantity),
+          { updatePipeline: true }
         );
         if (held) dbProduct = await Product.findById(item.productId);
       } else {
         dbProduct = await Product.findOneAndUpdate(
-          { _id: item.productId, stock: { $gte: item.quantity } }, // only decrement if enough stock
-          { $inc: { stock: -item.quantity } },
-          { new: true, runValidators: true }
+          { _id: item.productId, ...hasStock(item.quantity) }, // only decrement if enough stock
+          takeStock(item.quantity),
+          { returnDocument: "after", updatePipeline: true }
         );
       }
 
@@ -177,7 +208,8 @@ bill.post("/add", verifyToken, authorizeRoles("admin", "staff"), billLimiter, as
       decremented.push({ productId: dbProduct._id, quantity: item.quantity });
 
       const unit = dbProduct.unit || "pcs";
-      if (billType !== "retail" && unitById.get(item.productId)?.unit !== unit) {
+      const seen = unitById.get(item.productId);
+      if (seen.unit !== unit || LINK_FIELDS.some((f) => linkVal(f, seen[f]) !== linkVal(f, dbProduct[f]))) {
         await restoreStock(decremented, branchId).catch((e) => console.error("Stock rollback failed:", e));
         return res.status(409).json({ success: false, message: `${dbProduct.itemName} was just changed. Please try again.` });
       }
@@ -197,7 +229,9 @@ bill.post("/add", verifyToken, authorizeRoles("admin", "staff"), billLimiter, as
         unit,
         gstIncluded: !!dbProduct.gstIncluded,
         ...(billType === "event" ? { boxSize: item.boxSize, boxes: item.boxes } : {}),
-        ...(billType === "stall" ? { scoops: item.scoops, scoopGrams } : {}),
+        ...(billType === "stall" && item.scoops ? { scoops: item.scoops, scoopGrams: item.scoopGrams } : {}),
+        ...(billType === "stall" && item.pieces ? { soldQty: item.pieces, soldUnit: "pcs" } : {}),
+        ...(item.soldUnit ? { soldQty: item.soldQty, soldUnit: item.soldUnit } : {}),
         ...(item.discountValue > 0 && item.discountType ? { discountType: item.discountType, discountValue: item.discountValue } : {}),
       });
       // A flat line discount larger than the line is a typo, not a free item
@@ -717,7 +751,7 @@ bill.get("/report", verifyToken, authorizeRoles("admin"), async (req, res) => {
           d.toLocaleTimeString("en-IN", { timeZone: IST, hour: "2-digit", minute: "2-digit" }),
           b.invoiceNumber, b.customerName, b.mobileNumber, b.customerEmail || "", b.customerGstNumber || "",
           b.billedBy?.name || "", TYPE_LABEL[b.billType || "retail"], PAY_LABEL[b.paymentMethod] || b.paymentMethod,
-          (b.products || []).map((p) => `${p.itemName} x ${p.boxes ? `${p.boxes} box (${p.boxSize} L)` : p.scoops ? `${p.scoops} scoops` : `${p.quantity} ${p.unit || "pcs"}`}`).join("; "),
+          (b.products || []).map((p) => `${p.itemName} x ${p.boxes ? `${p.boxes} box (${p.boxSize} L)` : p.scoops ? `${p.scoops} scoops` : p.soldQty ? `${p.soldQty} ${p.soldUnit}` : `${p.quantity} ${p.unit || "pcs"}`}`).join("; "),
           num2(itemsTotal), num2(b.itemDiscountAmount), num2(b.discountAmount), b.couponCode || "",
           num2(b.subTotal), num2(b.gstAmount), num2(b.totalAmount),
         ];
@@ -873,7 +907,7 @@ bill.delete("/:id", verifyToken, authorizeRoles("admin"), async (req, res) => {
       try {
         if (branchId) {
           await BranchStock.bulkWrite(items.map((i) => ({
-            updateOne: { filter: { product: i.productId, branch: branchId }, update: { $inc: { stock: i.quantity } }, upsert: true },
+            updateOne: { filter: { product: i.productId, branch: branchId }, update: restoreDelta(i.quantity), upsert: true },
           })));
         } else if (items.length) {
           await restoreStock(items, null);

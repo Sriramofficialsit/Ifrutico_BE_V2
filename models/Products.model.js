@@ -45,7 +45,7 @@ const ProductSchema = new mongoose.Schema(
   // The dashboard enters/shows stock as packs of priceQty (5 x 1000 g); it is stored here in units (5000 g).
   unit: {
     type: String,
-    enum: ["pcs", "g", "kg", "ml", "ltr"],
+    enum: ["pcs", "scoop", "g", "kg", "ml", "ltr"],
     default: "pcs",
   },
 
@@ -55,6 +55,17 @@ const ProductSchema = new mongoose.Schema(
     type: Boolean,
     default: false,
   },
+
+  // Optional links between measurements so the same product can be billed in pcs, weight and volume.
+  // 0 = not set. pieceGrams: weight of 1 pc in g. gramsPerLitre: this product's density (0 = use the global value).
+  pieceGrams: { type: Number, min: 0, default: 0 },
+  // What one box / pack holds in all three measures (0 = not given). Price and stock are per box.
+  // These ratios drive every conversion between Retail (any unit), Events (litres) and Stalls (scoops / pcs).
+  packWeight: { type: Number, min: 0, default: 0 },       // grams per box
+  packVolume: { type: Number, min: 0, default: 0 },       // millilitres per box
+  packCount: { type: Number, min: 0, default: 0 },        // pieces or scoops per box
+  packCountUnit: { type: String, enum: ["pcs", "scoop"], default: "pcs" },
+  gramsPerLitre: { type: Number, min: 0, default: 0 },
 
   stock: {
     type: Number,

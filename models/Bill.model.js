@@ -80,7 +80,7 @@ const BillSchema = new mongoose.Schema(
           },
           unit: {
             type: String,
-            enum: ["pcs", "g", "kg", "ml", "ltr"],
+            enum: ["pcs", "scoop", "g", "kg", "ml", "ltr"],
             default: "pcs",
           },
           // Snapshot of the product's GST mode at billing time, so later product edits never change old bills
@@ -96,6 +96,10 @@ const BillSchema = new mongoose.Schema(
           // Events & Functions: sold as `boxes` boxes of `boxSize` litres (quantity = their total, in the product's unit)
           boxSize: { type: Number, min: 0 },
           boxes: { type: Number, min: 0 },
+          // Sold in a unit other than the stock unit (Retail "2 pcs" of a kg product, Stall pieces): what the customer got.
+          // quantity stays in the stock unit and prices the line.
+          soldQty: { type: Number, min: 0 },
+          soldUnit: { type: String, enum: ["pcs", "scoop", "g", "kg", "ml", "ltr"] },
           // Stalls: sold as `scoops` scoops of `scoopGrams` g each (quantity = their total, in the product's unit)
           scoops: { type: Number, min: 0 },
           scoopGrams: { type: Number, min: 0 },

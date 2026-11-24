@@ -22,14 +22,17 @@ const fmtNum = (n) => (Number.isInteger(n) ? String(n) : String(Number(n.toFixed
 
 // "16 ltr × ₹255.00/ltr", "2 × ₹50.00" — quantity and per-unit rate, independent of the pack size the price was set for
 // Events: "3 boxes of 2 L · ₹450.00 each"; Stalls: "4 scoops of 75 g · ₹40.00 each"
+const unitName = (u, n) => (u === "scoop" ? `scoop${n === 1 ? "" : "s"}` : u === "pcs" ? `pc${n === 1 ? "" : "s"}` : u);
 const lineText = (item) => {
   const each = (n) => money((Number(item.total) || 0) / n);
+  if (item.soldQty > 0 && item.soldUnit) return `${fmtNum(item.soldQty)} ${unitName(item.soldUnit, item.soldQty)} × ${each(item.soldQty)}/${item.soldUnit === "pcs" ? "pc" : item.soldUnit}`;
   if (item.boxes > 0) return `${fmtNum(item.boxes)} box${item.boxes === 1 ? "" : "es"} of ${fmtNum(item.boxSize)} L · ${each(item.boxes)} each`;
   if (item.scoops > 0) return `${fmtNum(item.scoops)} scoop${item.scoops === 1 ? "" : "s"} of ${fmtNum(item.scoopGrams)} g · ${each(item.scoops)} each`;
   let unit = item.unit || "pcs";
   let qty = Number(item.quantity) || 0;
   let rate = (Number(item.price) || 0) / (Number(item.priceQty) || 1);
   if (BIG_UNIT[unit]) { qty /= 1000; rate *= 1000; unit = BIG_UNIT[unit]; }
+  if (unit === "scoop") return `${fmtNum(qty)} scoop${qty === 1 ? "" : "s"} × ${money(rate)}/scoop`;
   return unit === "pcs" ? `${fmtNum(qty)} × ${money(rate)}` : `${fmtNum(qty)} ${unit} × ${money(rate)}/${unit}`;
 };
 
@@ -101,10 +104,12 @@ const qtyRate = (item) => {
   const total = Number(item.total) || 0;
   if (item.boxes > 0) return { qty: `${fmtNum(item.boxes)} × ${fmtNum(item.boxSize)} L`, rate: `${money(total / item.boxes)} /box`, note: `${fmtNum(item.boxes)} box${item.boxes === 1 ? "" : "es"} of ${fmtNum(item.boxSize)} L` };
   if (item.scoops > 0) return { qty: `${fmtNum(item.scoops)} scoop${item.scoops === 1 ? "" : "s"}`, rate: `${money(total / item.scoops)} /scoop`, note: `${fmtNum(item.scoopGrams)} g per scoop` };
+  if (item.soldQty > 0 && item.soldUnit) return { qty: `${fmtNum(item.soldQty)} ${unitName(item.soldUnit, item.soldQty)}`, rate: `${money(total / item.soldQty)} /${item.soldUnit === "pcs" ? "pc" : item.soldUnit}`, note: "" };
   let unit = item.unit || "pcs";
   let qty = Number(item.quantity) || 0;
   let rate = (Number(item.price) || 0) / (Number(item.priceQty) || 1);
   if (BIG_UNIT[unit]) { qty /= 1000; rate *= 1000; unit = BIG_UNIT[unit]; }
+  if (unit === "scoop") return { qty: `${fmtNum(qty)} scoop${qty === 1 ? "" : "s"}`, rate: `${money(rate)} /scoop`, note: "" };
   return { qty: unit === "pcs" ? fmtNum(qty) : `${fmtNum(qty)} ${unit}`, rate: unit === "pcs" ? money(rate) : `${money(rate)} /${unit}`, note: "" };
 };
 
